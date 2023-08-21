@@ -2128,6 +2128,11 @@ func (dn *Daemon) prepUpdateFromCluster() (*mcfgv1.MachineConfig, *mcfgv1.Machin
 // "transient state" file, which signifies that all of those prior steps have
 // been completed.
 func (dn *Daemon) completeUpdate(desiredConfigName string) error {
+	err:=enableTPMV2PCRValidation()
+	if err!=nil{
+		return fmt.Errorf("enable TPMv2 PCR encryption failed: %w", err)
+	}
+
 	if err := dn.nodeWriter.SetDesiredDrainer(fmt.Sprintf("%s-%s", "uncordon", desiredConfigName)); err != nil {
 		return fmt.Errorf("Could not set drain annotation: %w", err)
 	}
