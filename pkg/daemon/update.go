@@ -11,6 +11,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -434,6 +435,11 @@ func (dn *Daemon) update(oldConfig, newConfig *mcfgv1.MachineConfig, skipCertifi
 		// regardless of how we leave the "update loop"
 		dn.cancelSIGTERM()
 	}()
+
+	err := disableTPMV2PCRValidation()
+	if err != nil {
+		return fmt.Errorf("Disable TPMv2 PCR encryption failed: %w", err)
+	}
 
 	oldConfigName := oldConfig.GetName()
 	newConfigName := newConfig.GetName()
@@ -2100,4 +2106,140 @@ func (dn *CoreOSDaemon) applyLayeredOSChanges(mcDiff machineConfigDiff, oldConfi
 
 	// Apply extensions
 	return dn.applyExtensions(oldConfig, newConfig)
+}
+
+func disableTPMV2PCRValidation() error {
+	rootEncrypted, err := isRootPartitionEncryptedWithPCR1And7()
+	if err != nil {
+		return fmt.Errorf("error enabling tpm2 PCR encryption : %s", err)
+	}
+	if !(rootEncrypted) {
+		return nil
+	}
+	// Disable PCR 1 & 7 before upgrade
+	stdouterr, err := exec.Command("clevis-luks-edit",
+		"-d", "/dev/disk/by-partlabel/root",
+		"-s", "1",
+		"-c", `{"t":1,"pins":{"tpm2":[{"hash":"sha256","key":"ecc"}]}}`).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("error disabling tpm2 PCR validation: %s", stdouterr)
+	}
+	return nil
+}
+
+func enableTPMV2PCRValidation() error {
+	diskUsingTPM1And7, err:=wasDiskUsingPCR1And7BeforeUpdate()
+	if err !=nil {
+		return fmt.Errorf("error enabling tpm2 PCR encryption : %s", err)
+	}
+
+	if !(diskUsingTPM1And7) {
+		return nil
+	}
+	// Enable PCR 1 & 7 before upgrade
+	stdouterr, err := exec.Command("clevis-luks-edit",
+		"-d", "/dev/disk/by-partlabel/root",
+		"-s", "1",
+		"-c", `{"t":1,"pins":{"tpm2":[{"hash":"sha256","key":"ecc","pcr_bank":"sha256","pcr_ids":"1,7"}]}}`).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("error enabling tpm2 PCR validation: %s", stdouterr)
+	}
+	return nil
+}
+
+func isRootPartitionEncrypted() (isEncrypted bool, err error) {
+	out, err := exec.Command("lsblk",
+		"-J", "/dev/disk/by-partlabel/root").Output()
+	if err != nil {
+		return false, fmt.Errorf("error running lsblk: %s", out)
+	}
+	rootDrive := lsblkBlockDevice{}
+	json.Unmarshal([]byte(out), &rootDrive)
+	return rootDrive.Blockdevices[0].Children[0].Type == "crypt", nil
+}
+
+func isRootPartitionEncryptedWithPCR1And7() (isEncrypted1And7 bool, err error) {
+
+	out, err := exec.Command("clevis",
+		"luks", "/dev/disk/by-partlabel/root",
+		"list", "-d", "/dev/disk/by-partlabel/root").Output()
+	if err != nil {
+		return false, fmt.Errorf("error running clevis: %s", out)
+	}
+
+	pattern := `\'\{.*\}\'`
+	re := regexp.MustCompile(pattern)
+	match := re.FindString(string(out))
+
+	aClevisConfig := clevisConfig{}
+	json.Unmarshal([]byte(match), &aClevisConfig)
+
+	pcrConfigured := strings.Split(aClevisConfig.Pins.Tpm2[0].PcrIds, ",")
+	return contains(pcrConfigured, "7") && contains(pcrConfigured, "1"), nil
+
+}
+
+func contains(slice []string, target string) bool {
+	for _, item := range slice {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+type lsblkBlockDevice struct {
+	Blockdevices []struct {
+		Name        string        `json:"name"`
+		MajMin      string        `json:"maj:min"`
+		Rm          bool          `json:"rm"`
+		Size        string        `json:"size"`
+		Ro          bool          `json:"ro"`
+		Type        string        `json:"type"`
+		Mountpoints []interface{} `json:"mountpoints"`
+		Children    []struct {
+			Name        string   `json:"name"`
+			MajMin      string   `json:"maj:min"`
+			Rm          bool     `json:"rm"`
+			Size        string   `json:"size"`
+			Ro          bool     `json:"ro"`
+			Type        string   `json:"type"`
+			Mountpoints []string `json:"mountpoints"`
+		} `json:"children"`
+	} `json:"blockdevices"`
+}
+
+type clevisConfig struct {
+	T    int `json:"t"`
+	Pins struct {
+		Tpm2 []struct {
+			Hash    string `json:"hash"`
+			Key     string `json:"key"`
+			PcrBank string `json:"pcr_bank"`
+			PcrIds  string `json:"pcr_ids"`
+		} `json:"tpm2"`
+	} `json:"pins"`
+}
+
+const flagPcr1And7 = "/etc/crypt-pcr-1-7"
+
+func writeDiskUsingPCR1And7BeforeUpdate() error {
+	file, err := os.OpenFile(flagPcr1And7, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+	if err != nil {
+		return fmt.Errorf("Error opening/creating file:", err)
+	}
+	defer file.Close()
+	return nil
+}
+
+func wasDiskUsingPCR1And7BeforeUpdate() (bool, error) {
+	// Check if the file exists
+	_, err := os.Stat(flagPcr1And7)
+	if err == nil {
+		return true, nil
+	} else if os.IsNotExist(err) {
+		return false, nil
+	} else {
+		return false, fmt.Errorf("error opening PCR 1 & 7 flag: %w", err)
+	}
 }
