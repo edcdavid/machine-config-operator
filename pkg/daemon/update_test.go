@@ -821,3 +821,115 @@ func TestOriginalFileBackupRestore(t *testing.T) {
 	assert.Nil(t, err)
 
 }
+
+func Test_decodeClevisListPCR1And7(t *testing.T) {
+	type args struct {
+		clevisOutput string
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "ok",
+			args: args{clevisOutput: `1: sss '{"t":1,"pins":{"tpm2":[{"hash":"sha256","key":"ecc","pcr_bank":"sha256","pcr_ids":"1,7"}]}}'`},
+			want: true,
+		},
+		{
+			name: "nok",
+			args: args{clevisOutput: `1: sss '{"t":1,"pins":{"tpm2":[{"hash":"sha256","key":"ecc","pcr_bank":"sha256","pcr_ids":"1"}]}}'`},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := decodeClevisListPCR1And7(tt.args.clevisOutput); got != tt.want {
+				t.Errorf("decodeClevisListPCR1And7() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_decodeLsblkRootCrypt(t *testing.T) {
+	type args struct {
+		lsblkOutput string
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "ok",
+			args: args{lsblkOutput: `{
+				"blockdevices": [
+				   {
+					  "name": "vda4",
+					  "maj:min": "252:4",
+					  "rm": false,
+					  "size": "199.5G",
+					  "ro": false,
+					  "type": "part",
+					  "mountpoints": [
+						  null
+					  ],
+					  "children": [
+						 {
+							"name": "root",
+							"maj:min": "253:0",
+							"rm": false,
+							"size": "199.5G",
+							"ro": false,
+							"type": "crypt",
+							"mountpoints": [
+								"/var/lib/containers/storage/overlay", "/var", "/sysroot/ostree/deploy/rhcos/var", "/sysroot", "/usr", "/etc", "/"
+							]
+						 }
+					  ]
+				   }
+				]
+			 }`},
+			want: true,
+		},
+		{
+			name: "nok",
+			args: args{lsblkOutput: `{
+				"blockdevices": [
+				   {
+					  "name": "vda4",
+					  "maj:min": "252:4",
+					  "rm": false,
+					  "size": "199.5G",
+					  "ro": false,
+					  "type": "part",
+					  "mountpoints": [
+						  null
+					  ],
+					  "children": [
+						 {
+							"name": "root",
+							"maj:min": "253:0",
+							"rm": false,
+							"size": "199.5G",
+							"ro": false,
+							"type": "dummy",
+							"mountpoints": [
+								"/var/lib/containers/storage/overlay", "/var", "/sysroot/ostree/deploy/rhcos/var", "/sysroot", "/usr", "/etc", "/"
+							]
+						 }
+					  ]
+				   }
+				]
+			 }`},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := decodeLsblkRootCrypt(tt.args.lsblkOutput); got != tt.want {
+				t.Errorf("decodeLsblkRootCrypt() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
