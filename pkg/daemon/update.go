@@ -2288,6 +2288,10 @@ func disableTPMV2PCRValidation() error {
 	if err != nil {
 		return fmt.Errorf("error disabling tpm2 PCR validation err: %s stdouterr: %s", err, stdouterr)
 	}
+	err = writeDiskUsingPCR1And7BeforeUpdate()
+	if err != nil {
+		return fmt.Errorf("error writing TPM 1 and 7 before update flag, err: %s", err)
+	}
 	glog.Infof("TPMv2 PCR 1 & 7 protection disabled successfully on encrypted root disk")
 	return nil
 }
