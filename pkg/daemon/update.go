@@ -2277,6 +2277,7 @@ func disableTPMV2PCRValidation() error {
 		return fmt.Errorf("error enabling tpm2 PCR encryption : %s", err)
 	}
 	if !(rootEncrypted) {
+		glog.Infof("PCR 1 & 7 protection cannot be disabled")
 		return nil
 	}
 	// Disable PCR 1 & 7 before upgrade
@@ -2285,8 +2286,9 @@ func disableTPMV2PCRValidation() error {
 		"-s", "1",
 		"-c", `{"t":1,"pins":{"tpm2":[{"hash":"sha256","key":"ecc"}]}}`).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("error disabling tpm2 PCR validation: %s", stdouterr)
+		return fmt.Errorf("error disabling tpm2 PCR validation err: %s stdouterr: %s", err, stdouterr)
 	}
+	glog.Infof("TPMv2 PCR 1 & 7 protection disabled successfully on encrypted root disk")
 	return nil
 }
 
@@ -2297,16 +2299,18 @@ func enableTPMV2PCRValidation() error {
 	}
 
 	if !(diskUsingTPM1And7) {
+		glog.Infof("TPMv2 PCR 1 & 7 protection was not enabled before Openshift upgrade - no attempt to re-enable")
 		return nil
 	}
-	// Enable PCR 1 & 7 before upgrade
+
 	stdouterr, err := exec.Command("clevis-luks-edit",
 		"-d", "/dev/disk/by-partlabel/root",
 		"-s", "1",
 		"-c", `{"t":1,"pins":{"tpm2":[{"hash":"sha256","key":"ecc","pcr_bank":"sha256","pcr_ids":"1,7"}]}}`).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("error enabling tpm2 PCR validation: %s", stdouterr)
+		return fmt.Errorf("error enabling tpm2 PCR validation err: %s stdouterr: %s", err, stdouterr)
 	}
+	glog.Infof("TPMv2 PCR 1 & 7 protection was re-enabled sucessfully")
 	return nil
 }
 
@@ -2316,6 +2320,7 @@ func isRootPartitionEncrypted() (isEncrypted bool, err error) {
 	if err != nil {
 		return false, fmt.Errorf("error running lsblk: %s", out)
 	}
+	glog.Infof("output of lsblk -J /dev/disk/by-partlabel/root : %s ", out)
 	return decodeLsblkRootCrypt(string(out)), nil
 }
 
@@ -2334,9 +2339,14 @@ func isRootPartitionEncryptedWithPCR1And7() (isEncrypted1And7 bool, err error) {
 		glog.Errorf("error running clevis: %s", err)
 		return false, nil
 	}
-
-	return decodeClevisListPCR1And7(string(out)), nil
-
+	glog.Infof("output of clevis luks list -d /dev/disk/by-partlabel/root : %s ", out)
+	isRootPartitionCrypt := decodeClevisListPCR1And7(string(out))
+	if isRootPartitionCrypt {
+		glog.Infof("Root disk is encrypted with TPMv2 PCR 1 and 7 protection")
+	} else {
+		glog.Infof("Root disk is not encrypted with TPMv2 PCR 1 and 7 protection")
+	}
+	return isRootPartitionCrypt, nil
 }
 
 func decodeClevisListPCR1And7(clevisOutput string) bool {
